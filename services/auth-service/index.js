@@ -1,4 +1,6 @@
 const express = require('express');
+const cors = require('cors');
+
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const pool = require('../../shared/db');
@@ -24,7 +26,7 @@ const swaggerSpec = swaggerJsdoc(options);
 
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: 'http://localhost:8080', credentials: true }));
+app.options('*', cors(corsOptions));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Middleware de autenticação
