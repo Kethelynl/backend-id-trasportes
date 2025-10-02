@@ -30,9 +30,6 @@ const corsOptions = {
 // Usa o middleware do CORS com as opções definidas
 app.use(cors(corsOptions));
 
-// Habilita a resposta para requisições pre-flight (OPTIONS) em todas as rotas
-app.options('/*', cors(corsOptions));
-
 app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body;
 
