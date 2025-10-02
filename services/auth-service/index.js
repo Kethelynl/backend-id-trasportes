@@ -3,7 +3,7 @@ const express = require('express');
 const pool = require('../../shared/db');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcryptjs'); // Mantendo o uso de bcryptjs
 
 const app = express();
 app.use(express.json());
