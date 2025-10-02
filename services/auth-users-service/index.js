@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../../shared/db');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
