@@ -28,7 +28,6 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 app.use(express.json());
-app.use(cors({ origin: 'http://localhost:8080', credentials: true }));
 
 const allowedOrigins = [
   'http://localhost:8080', 
