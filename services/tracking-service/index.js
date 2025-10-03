@@ -29,6 +29,24 @@ const wss = new WebSocket.Server({ server });
 
 app.use(express.json());
 app.use(cors({ origin: 'http://localhost:8080', credentials: true }));
+
+const allowedOrigins = [
+  'http://localhost:8080', 
+  'http://localhost:5173', 
+  'https://frontend-id-transportes-6ruh7wk5m.vercel.app'
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+};
+app.use(cors(corsOptions));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Armazenar conexões WebSocket por empresa
@@ -137,7 +155,7 @@ function broadcastToCompany(companyId, message) {
 /**
  * @swagger
  * /api/tracking/location:
- *   post:
+ *   post: 
  *     summary: Enviar localização do motorista
  *     security:
  *       - bearerAuth: []
@@ -167,54 +185,76 @@ function broadcastToCompany(companyId, message) {
  *         description: Localização enviada com sucesso
  */
 app.post('/api/tracking/location', authorize(['DRIVER']), async (req, res) => {
-  try {
-    const { driver_id, latitude, longitude, accuracy, speed, heading, delivery_id } = req.body;
+    try {
+        const { latitude, longitude, accuracy, speed, heading, delivery_id } = req.body;
+        const company_id = req.user.company_id;
+        const user_id = req.user.id; // Pega o user_id do token JWT
 
-    // Verificar se o motorista existe e pertence à empresa
-    const [driverRows] = await pool.query(
-      'SELECT * FROM drivers WHERE id = ? AND company_id = ?',
-      [driver_id, req.user.company_id]
-    );
+        // Busca o driver_id correspondente ao user_id
+        const [driverRows] = await pool.query('SELECT id FROM drivers WHERE user_id = ? AND company_id = ?', [user_id, company_id]);
 
-    if (driverRows.length === 0) {
-      return res.status(404).json({ error: 'Motorista não encontrado' });
+        if (driverRows.length === 0) {
+            console.warn(`[Tracking] Tentativa de salvar localização para um usuário sem registro de motorista. User ID: ${user_id}`);
+            return res.status(404).json({ error: 'Motorista não encontrado para este usuário.' });
+        }
+        const driver_id = driverRows[0].id; // Este é o ID correto para a tabela tracking_points
+
+        const parsedLatitude = latitude === undefined || latitude === null ? null : Number(latitude);
+        const parsedLongitude = longitude === undefined || longitude === null ? null : Number(longitude);
+        const rawAccuracy = accuracy === undefined || accuracy === null ? null : Number(accuracy);
+        const parsedAccuracy = rawAccuracy !== null && Number.isFinite(rawAccuracy) && rawAccuracy >= 0 ? rawAccuracy : null;
+        const sanitizedAccuracy = parsedAccuracy !== null ? Math.min(parsedAccuracy, 999.99) : null;
+        const parsedSpeed = typeof speed === 'number' && Number.isFinite(speed) ? speed : null;
+        const parsedHeading = typeof heading === 'number' && Number.isFinite(heading) ? heading : null;
+        const parsedDeliveryId = delivery_id ?? null;
+
+        console.log('[Tracking] Recebido ping de localização', {
+            driver_id,
+            company_id,
+            user_id,
+            latitude,
+            longitude,
+            accuracy: sanitizedAccuracy,
+            rawAccuracy: parsedAccuracy,
+            speed,
+            heading,
+            delivery_id,
+            timestamp: new Date().toISOString(),
+        });
+
+        if (!driver_id || parsedLatitude === null || Number.isNaN(parsedLatitude) || parsedLongitude === null || Number.isNaN(parsedLongitude) || !company_id) {
+            return res.status(400).json({ error: 'Dados de localização incompletos' });
+        }
+
+        // Insere a localização na tabela tracking_points
+        await pool.execute(
+            `INSERT INTO tracking_points (driver_id, company_id, latitude, longitude, accuracy, speed, heading, delivery_id, timestamp)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+            [driver_id, company_id, parsedLatitude, parsedLongitude, sanitizedAccuracy, parsedSpeed, parsedHeading, parsedDeliveryId]
+        );
+
+        console.log('[Tracking] Localização persistida', { driver_id, company_id });
+        res.status(200).json({ success: true, message: 'Localização salva com sucesso' });
+    } catch (error) {
+        console.error('Erro ao salvar localização:', error);
+        res.status(500).json({ error: 'Erro interno ao salvar localização', details: error.message });
     }
-
-    // Salvar localização
-    await pool.query(`
-      INSERT INTO tracking_points (driver_id, company_id, latitude, longitude, accuracy, speed, heading, delivery_id, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
-    `, [driver_id, req.user.company_id, latitude, longitude, accuracy, speed, heading, delivery_id || null]);
-
-    // Broadcast para outros usuários da empresa
-    broadcastToCompany(req.user.company_id, {
-      type: 'location_update',
-      driver_id,
-      location: { latitude, longitude, accuracy, speed, heading },
-      timestamp: new Date().toISOString()
-    });
-
-    res.json({ success: true, message: 'Localização enviada com sucesso' });
-
-  } catch (error) {
-    console.error('Erro ao enviar localização:', error);
-    res.status(500).json({ error: error.message });
-  }
 });
 
 /**
  * @swagger
  * /api/tracking/drivers/current-locations:
- *   get:
+ *   get: 
  *     summary: Obter localizações atuais de todos os motoristas
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Localizações dos motoristas
+ *         description: LocalizaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes dos motoristas
  */
 app.get('/api/tracking/drivers/current-locations', authorize(['ADMIN', 'SUPERVISOR', 'DRIVER']), async (req, res) => {
   try {
+    console.log('[Tracking] Buscando localizações atuais', { company_id: req.user.company_id });
     const [rows] = await pool.query(`
       SELECT 
         d.id as driver_id,
@@ -225,29 +265,43 @@ app.get('/api/tracking/drivers/current-locations', authorize(['ADMIN', 'SUPERVIS
         tp.speed,
         tp.heading,
         tp.timestamp as last_update,
-        CASE 
-          WHEN tp.timestamp > DATE_SUB(NOW(), INTERVAL 5 MINUTE) THEN 'active'
-          ELSE 'inactive'
-        END as status,
-        dn.id as current_delivery_id,
-        dn.client_name_extracted as current_delivery_client
+        IF(tp.timestamp < DATE_SUB(NOW(), INTERVAL 10 MINUTE), 'idle', 'active') as activity_status,
+        d.status,
+        del.id as current_delivery_id,
+        del.client_name as current_delivery_client
       FROM drivers d
-      LEFT JOIN users u ON d.user_id = u.id
-      LEFT JOIN (
+      INNER JOIN (
         SELECT driver_id, MAX(timestamp) as max_timestamp
         FROM tracking_points 
         WHERE company_id = ?
+          AND timestamp >= DATE_SUB(NOW(), INTERVAL 2 HOUR) -- Aumenta a janela de busca para 2 horas
         GROUP BY driver_id
-      ) latest ON d.id = latest.driver_id
-      LEFT JOIN tracking_points tp ON d.id = tp.driver_id AND tp.timestamp = latest.max_timestamp
-      LEFT JOIN delivery_notes dn ON d.id = dn.driver_id AND dn.status IN ('PENDING', 'IN_TRANSIT')
+      ) latest ON latest.driver_id = d.id
+      INNER JOIN tracking_points tp ON tp.driver_id = latest.driver_id AND tp.timestamp = latest.max_timestamp
+      LEFT JOIN users u ON d.user_id = u.id
+      LEFT JOIN (
+          SELECT 
+              id, 
+              driver_id, 
+              client_name,
+              -- Subconsulta para pegar apenas a entrega mais recente em trânsito por motorista
+              ROW_NUMBER() OVER(PARTITION BY driver_id ORDER BY created_at DESC) as rn 
+          FROM deliveries 
+          WHERE status = 'IN_TRANSIT'
+      ) del ON d.id = del.driver_id AND del.rn = 1
       WHERE d.company_id = ?
+        AND tp.latitude IS NOT NULL
+        AND tp.longitude IS NOT NULL
       ORDER BY tp.timestamp DESC
     `, [req.user.company_id, req.user.company_id]);
 
+    console.log(`[Tracking] Consulta executada. ${rows.length} localizações encontradas.`);
+    if (rows.length > 0) {
+        console.log('[Tracking] Exemplo de dados retornados:', JSON.stringify(rows[0], null, 2));
+    }
     res.json({
       success: true,
-      data: rows
+      data: rows.map(row => ({ ...row, activity_status: row.activity_status }))
     });
 
   } catch (error) {
@@ -259,7 +313,7 @@ app.get('/api/tracking/drivers/current-locations', authorize(['ADMIN', 'SUPERVIS
 /**
  * @swagger
  * /api/tracking/drivers/{driverId}/history:
- *   get:
+ *   get: 
  *     summary: Obter histórico de rastreamento do motorista
  *     security:
  *       - bearerAuth: []
@@ -355,29 +409,56 @@ app.get('/api/tracking/drivers/:driverId/history', authorize(['ADMIN', 'SUPERVIS
 app.put('/api/tracking/drivers/:driverId/status', authorize(['DRIVER', 'ADMIN']), async (req, res) => {
   try {
     const { driverId } = req.params;
-    const { status } = req.body;
+    const { status: frontendStatus } = req.body;
+    const companyId = req.user.company_id;
 
-    // Verificar se o motorista existe e pertence à empresa
+    console.log(`[Tracking] Recebida atualização de status para driver ${driverId} com status: ${frontendStatus}`);
+
+    // Mapeia o status do frontend para o status do banco de dados
+    const statusMap = {
+      online: 'active',
+      offline: 'inactive',
+      idle: 'inactive', 
+      busy: 'active', 
+    };
+
+    const dbStatus = statusMap[frontendStatus];
+
+    if (!dbStatus) {
+      console.error(`[Tracking] Status inválido recebido: ${frontendStatus}`);
+      return res.status(400).json({ error: `Status inválido: ${frontendStatus}` });
+    }
+
+    let driverIdToUpdate = driverId;
     const [driverRows] = await pool.query(
       'SELECT * FROM drivers WHERE id = ? AND company_id = ?',
-      [driverId, req.user.company_id]
+      [driverId, companyId]
     );
 
     if (driverRows.length === 0) {
-      return res.status(404).json({ error: 'Motorista não encontrado' });
+      const [rowsByUser] = await pool.query(
+        'SELECT * FROM drivers WHERE user_id = ? AND company_id = ?',
+        [req.user.user_id, companyId]
+      );
+
+      if (rowsByUser.length === 0) {
+        console.warn('[Tracking] Driver não encontrado para atualização de status', { driverId, userId: req.user.user_id });
+        return res.status(404).json({ error: 'Motorista não encontrado' });
+      }
+
+      driverIdToUpdate = rowsByUser[0].id;
     }
 
-    // Atualizar status
     await pool.query(
       'UPDATE drivers SET status = ?, last_status_update = NOW() WHERE id = ?',
-      [status, driverId]
+      [dbStatus, driverIdToUpdate]
     );
+    console.log(`[Tracking] Status do driver ${driverIdToUpdate} atualizado para '${dbStatus}' no banco de dados.`);
 
-    // Broadcast para outros usuários da empresa
-    broadcastToCompany(req.user.company_id, {
+    broadcastToCompany(companyId, {
       type: 'driver_status',
-      driver_id: driverId,
-      status,
+      driver_id: driverIdToUpdate,
+      status: dbStatus, // Envia o status do DB para consistência
       timestamp: new Date().toISOString()
     });
 
@@ -388,6 +469,8 @@ app.put('/api/tracking/drivers/:driverId/status', authorize(['DRIVER', 'ADMIN'])
     res.status(500).json({ error: error.message });
   }
 });
+
+
 
 if (require.main === module) {
   server.listen(3005, () => console.log('Tracking Service rodando na porta 3005'));
