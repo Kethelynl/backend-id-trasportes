@@ -11,7 +11,14 @@ app.use(express.json());
 const jwtSecret = process.env.JWT_SECRET || "fda76ff877a92f9a86e7831fad372e2d9e777419e155aab4f5b18b37d280d05a";
 
 // CORREÇÃO: Adiciona a porta 5173 (do Vite) à lista de origens permitidas
-const allowedOrigins = ['http://localhost:8080', 'http://localhost:5173', 'http://localhost:8081', 'http://127.0.0.1:8080', 'http://127.0.0.1:8081'];
+const allowedOrigins = [
+  'http://localhost:8080', 
+  'http://localhost:5173', 
+  'http://localhost:8081', 
+  'http://127.0.0.1:8080', 
+  'http://127.0.0.1:8081',
+  'https://frontend-id-transportes-6ruh7wk5m.vercel.app' // Adicionando URL de produção do frontend
+];
  
 // Define as opções do CORS em uma variável para reutilização
 const corsOptions = {
