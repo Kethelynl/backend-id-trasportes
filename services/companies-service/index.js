@@ -1,8 +1,9 @@
+require('dotenv').config();
+
 const express = require('express');
 const pool = require('../../shared/db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-require('dotenv').config();
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 const cors = require('cors');
@@ -23,7 +24,24 @@ const swaggerSpec = swaggerJsdoc(options);
 
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: 'http://localhost:8080', credentials: true }));
+
+const allowedOrigins = [
+  'http://localhost:8080', 
+  'http://localhost:5173', 
+  'https://frontend-id-transportes-6ruh7wk5m.vercel.app'
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+};
+app.use(cors(corsOptions));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Middleware de autenticação e autorização
